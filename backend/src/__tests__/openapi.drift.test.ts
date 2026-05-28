@@ -29,10 +29,31 @@ function specPaths(spec: OpenApiSpec): string[] {
 // contains a path not in the spec — that is the "route not documented" direction).
 const IMPLEMENTED_ROUTES = [
   "/health",
+  "/health/live",
+  "/health/ready",
+  "/auth/challenge",
+  "/auth/verify",
+  "/auth/logout",
   "/wallet/balance",
   "/wallet/path-payment-quote",
+  "/users/me",
+  "/users/{address}",
+  "/dispute-categories",
+  "/dispute-categories/{id}",
+  "/trades",
+  "/trades/stats",
+  "/trades/{id}",
+  "/trades/{id}/deposit",
+  "/trades/{id}/confirm",
+  "/trades/{id}/release",
+  "/trades/{id}/dispute",
+  "/trades/{id}/manifest",
+  "/trades/{id}/evidence",
+  "/evidence/{cid}/stream",
+  "/evidence/video",
   "/trades/{id}/history",
   "/trades/{id}/history/verify",
+  "/goals",
 ];
 
 describe("OpenAPI drift detection", () => {

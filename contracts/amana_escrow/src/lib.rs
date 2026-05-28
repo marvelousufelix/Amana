@@ -473,6 +473,7 @@ impl EscrowContract {
         buyer_loss_bps: u32,
         seller_loss_bps: u32,
     ) -> u64 {
+        buyer.require_auth();
         assert!(amount > 0, "amount must be greater than zero");
         assert!(
             buyer != seller,
@@ -2921,6 +2922,52 @@ mod test {
         let (contract_id, _usdc, buyer, _seller, _treasury, trade_id) =
             setup_disputed_trade(&env, 10_000, 100);
         let client = EscrowContractClient::new(&env, &contract_id);
+        client.cancel_trade(&trade_id, &buyer);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot cancel trade in current status")]
+    fn test_cancel_trade_rejects_after_completed() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, _usdc_id, buyer, _seller, _treasury, trade_id) =
+            setup_disputed_trade(&env, 10_000, 100);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let mediator = Address::generate(&env);
+        client.set_mediator(&mediator);
+        client.resolve_dispute(&trade_id, &mediator, &10_000_u32);
+        let trade = client.get_trade(&trade_id);
+        assert!(matches!(trade.status, TradeStatus::Completed));
+        client.cancel_trade(&trade_id, &buyer);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot cancel trade in current status")]
+    fn test_cancel_trade_rejects_after_cancelled() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let seller = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let usdc_id = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        client.initialize(&admin, &usdc_id, &treasury, &100);
+        let amount = 10_000_i128;
+        let token_client = token::StellarAssetClient::new(&env, &usdc_id);
+        token_client.mint(&buyer, &amount);
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
+        client.deposit(&trade_id);
+        // Admin cancels the funded trade immediately
+        client.cancel_trade(&trade_id, &admin);
+        assert!(matches!(
+            client.get_trade(&trade_id).status,
+            TradeStatus::Cancelled
+        ));
+        // Buyer can no longer cancel - already Cancelled
         client.cancel_trade(&trade_id, &buyer);
     }
 }
@@ -6224,5 +6271,71 @@ mod fee_and_evidence_tests {
         let list = client.get_evidence_list(&trade_id);
         assert_eq!(list.len(), 1, "evidence must be preserved after resolution");
         assert_eq!(list.get(0).unwrap().ipfs_hash, ipfs);
+    }
+
+    /// Dispute resolution with zero fee: seller_net > 0, fee == 0, buyer_refund > 0.
+    /// Verifies the zero-fee transfer branch is skipped without panicking.
+    #[test]
+    fn test_dispute_resolution_zero_fee_skip() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, buyer, seller, treasury, usdc_id, trade_id) =
+            setup_fee_trade(&env, 10_000, 0);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let reason = String::from_str(&env, "QmZeroFee");
+        client.initiate_dispute(&trade_id, &buyer, &reason);
+        let mediator = Address::generate(&env);
+        client.set_mediator(&mediator);
+        // seller_gets_bps = 10_000 → no loss
+        // seller_raw = 10_000, fee = 0 (fee_bps=0), seller_net = 10_000, buyer_refund = 0
+        client.resolve_dispute(&trade_id, &mediator, &10_000_u32);
+        let tok = token::Client::new(&env, &usdc_id);
+        assert_eq!(tok.balance(&seller), 10_000);
+        assert_eq!(tok.balance(&treasury), 0, "fee must be zero");
+        assert_eq!(tok.balance(&buyer), 0);
+        assert_eq!(tok.balance(&client.address), 0);
+        assert_eq!(10_000 + 0 + 0, 10_000, "conservation invariant");
+    }
+
+    /// Dispute resolution where seller gets zero (seller_net == 0):
+    /// buyer_loss_bps = 0, seller_loss_bps = 10000, seller_gets_bps = 0, fee_bps = 0.
+    /// seller_loss = 10_000, seller_raw = 0, fee = 0, seller_net = 0, buyer_refund = 10_000.
+    #[test]
+    fn test_dispute_resolution_zero_seller_net_skip() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let seller = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let usdc_id = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        // fee_bps = 0 so fee is also zero
+        client.initialize(&admin, &usdc_id, &treasury, &0);
+        let amount = 10_000_i128;
+        let token_client = token::StellarAssetClient::new(&env, &usdc_id);
+        token_client.mint(&buyer, &amount);
+        // seller bears 100% loss (buyer_loss_bps=0, seller_loss_bps=10000)
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &0_u32, &10000_u32);
+        client.deposit(&trade_id);
+        let reason = String::from_str(&env, "QmZeroSellerNet");
+        client.initiate_dispute(&trade_id, &seller, &reason);
+        let mediator = Address::generate(&env);
+        client.set_mediator(&mediator);
+        // seller_gets_bps = 0 → loss_bps = 10_000 (100% loss)
+        // seller_loss = 10_000 * 10_000 * 10_000 / 100_000_000 = 10_000
+        // seller_raw = 10_000 - 10_000 = 0
+        // fee = 0 * 0 / 10_000 = 0
+        // seller_net = 0, buyer_refund = 10_000
+        client.resolve_dispute(&trade_id, &mediator, &0_u32);
+        let tok = token::Client::new(&env, &usdc_id);
+        assert_eq!(tok.balance(&seller), 0, "seller net must be zero");
+        assert_eq!(tok.balance(&treasury), 0, "fee must be zero");
+        assert_eq!(tok.balance(&buyer), 10_000, "buyer gets full refund");
+        assert_eq!(tok.balance(&client.address), 0);
+        assert_eq!(0 + 0 + 10_000, 10_000, "conservation invariant");
     }
 }

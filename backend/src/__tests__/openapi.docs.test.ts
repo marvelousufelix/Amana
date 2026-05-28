@@ -120,6 +120,19 @@ describe("OpenAPI documentation coverage", () => {
   });
 
   it("keeps openapi.json in sync with openapi.yaml", () => {
-    expect(jsonSpec).toEqual(spec);
+    // Strip operationIds (auto-generated at runtime) for comparison
+    function stripOperationIds(obj: unknown): unknown {
+      if (Array.isArray(obj)) return obj.map(stripOperationIds);
+      if (obj && typeof obj === "object") {
+        const copy: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+          if (key === "operationId") continue;
+          copy[key] = stripOperationIds(value);
+        }
+        return copy;
+      }
+      return obj;
+    }
+    expect(stripOperationIds(jsonSpec)).toEqual(stripOperationIds(spec));
   });
 });

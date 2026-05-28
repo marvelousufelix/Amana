@@ -121,6 +121,10 @@ jobs:
         if: needs.changes.outputs.backend == 'true'
         run: npm ci
 
+      - name: Lint
+        if: needs.changes.outputs.backend == 'true'
+        run: npm run lint
+
       - name: Build
         if: needs.changes.outputs.backend == 'true'
         run: npm run build

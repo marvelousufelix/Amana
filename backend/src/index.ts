@@ -23,14 +23,41 @@ const docsDir = path.join(__dirname, "docs");
 const openapiYamlPath = path.join(docsDir, "openapi.yaml");
 const openapiJsonPath = path.join(docsDir, "openapi.json");
 
-let openapiSpec: unknown = null;
+let openapiSpec: Record<string, unknown> | null = null;
 try {
-  openapiSpec = YAML.load(openapiYamlPath);
+  openapiSpec = YAML.load(openapiYamlPath) as Record<string, unknown>;
 } catch (error) {
   appLogger.warn({ error }, "OpenAPI spec could not be loaded");
 }
 
 if (process.env.NODE_ENV !== "production" && openapiSpec) {
+  // Override server URL from env so Try It Out links work in deployed environments
+  if (process.env.API_PUBLIC_URL && Array.isArray(openapiSpec.servers)) {
+    openapiSpec.servers = [{ url: process.env.API_PUBLIC_URL }];
+  }
+
+  // Auto-generate stable operationId for every operation so generated docs
+  // have consistent anchor links and code-gen-friendly function names
+  if (typeof openapiSpec.paths === "object" && openapiSpec.paths) {
+    for (const [path, methods] of Object.entries(
+      openapiSpec.paths as Record<string, unknown>,
+    )) {
+      for (const [method, operation] of Object.entries(
+        methods as Record<string, unknown>,
+      )) {
+        if (typeof operation === "object" && operation !== null && !(operation as Record<string, unknown>).operationId) {
+          const safePath = path
+            .replace(/[{}]/g, "")
+            .replace(/[^a-zA-Z0-9_/]/g, "_")
+            .replace(/\/+/g, ".")
+            .replace(/^\.|\.$/g, "")
+            .replace(/\.+/g, ".");
+          (operation as Record<string, unknown>).operationId = `${method}${safePath ? `.${safePath}` : ""}`;
+        }
+      }
+    }
+  }
+
   try {
     fs.writeFileSync(openapiJsonPath, JSON.stringify(openapiSpec, null, 2));
   } catch (error) {
