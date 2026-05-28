@@ -42,7 +42,8 @@ export const initiateDisputeSchema = z
       .optional(),
     categoryId: z.number().int().positive("categoryId must be a positive integer").optional(),
   })
-  .superRefine((data: { category?: string; categoryId?: number }, ctx: z.RefinementCtx) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  .superRefine((data: { category?: string; categoryId?: number }, ctx: any) => {
     if (!data.category && data.categoryId === undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

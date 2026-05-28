@@ -61,12 +61,13 @@ describe("errorHandler middleware", () => {
     jest.clearAllMocks();
   });
 
-  it("returns safe structured payload with tracing IDs from request", () => {
+  it("returns structured payload with tracing IDs from request", () => {
     (env as any).NODE_ENV = "development";
 
     const req = {
       correlationId: "corr-abc",
       requestId: "req-123",
+      path: "/trades",
     } as any;
 
     const status = jest.fn().mockReturnThis();
@@ -83,13 +84,14 @@ describe("errorHandler middleware", () => {
     errorHandler(err, req, res, jest.fn());
 
     expect(status).toHaveBeenCalledWith(422);
-    expect(json).toHaveBeenCalledWith({
-      error: true,
-      status: 422,
-      message: "validation exploded",
-      correlationId: "corr-abc",
-      requestId: "req-123",
-    });
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "validation exploded",
+        correlationId: "corr-abc",
+        requestId: "req-123",
+        timestamp: expect.any(String),
+      }),
+    );
   });
 
   it("falls back to tracing headers when request properties are absent", () => {
@@ -113,11 +115,10 @@ describe("errorHandler middleware", () => {
     expect(status).toHaveBeenCalledWith(500);
     expect(json).toHaveBeenCalledWith(
       expect.objectContaining({
-        error: true,
-        status: 500,
         message: "boom",
         correlationId: "corr-from-header",
         requestId: "req-from-header",
+        timestamp: expect.any(String),
       }),
     );
   });
@@ -137,11 +138,12 @@ describe("errorHandler middleware", () => {
     errorHandler(new Error("sensitive failure"), req, res, jest.fn());
 
     expect(status).toHaveBeenCalledWith(500);
-    expect(json).toHaveBeenCalledWith({
-      error: true,
-      status: 500,
-      message: "Internal server error",
-    });
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Internal server error",
+        timestamp: expect.any(String),
+      }),
+    );
   });
 });
 

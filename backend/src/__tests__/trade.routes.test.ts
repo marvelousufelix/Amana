@@ -6,6 +6,8 @@ import { tradeRoutes } from "../routes/trade.routes";
 import { ContractService } from "../services/contract.service";
 import { TradeService } from "../services/trade.service";
 import { AuthService } from "../services/auth.service";
+import { errorHandler } from "../middleware/errorHandler";
+import { ErrorCode } from "../errors/errorCodes";
 
 jest.mock("../services/contract.service");
 jest.mock("../services/trade.service");
@@ -13,6 +15,8 @@ jest.mock("../services/trade.service");
 const app = express();
 app.use(express.json());
 app.use("/trades", tradeRoutes);
+// Wire in the centralized error handler so AppError instances are serialized
+app.use(errorHandler);
 
 describe("Trade Routes", () => {
   const buyerAddress = StellarSdk.Keypair.random().publicKey();
@@ -96,7 +100,7 @@ describe("Trade Routes", () => {
     });
   });
 
-  it("returns 400 for an invalid sellerAddress", async () => {
+  it("returns 400 with structured error for an invalid sellerAddress", async () => {
     const res = await request(app)
       .post("/trades")
       .set("Authorization", `Bearer ${token}`)
@@ -106,7 +110,9 @@ describe("Trade Routes", () => {
       });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toBe("Invalid sellerAddress");
+    expect(res.body.code).toBe(ErrorCode.VALIDATION_ERROR);
+    expect(res.body.message).toBeDefined();
+    expect(res.body.timestamp).toBeDefined();
   });
 
   it("returns 401 without auth", async () => {
@@ -151,7 +157,7 @@ describe("Trade Routes", () => {
     );
   });
 
-  it("returns 403 if the caller is the seller", async () => {
+  it("returns 403 with structured error if the caller is the seller", async () => {
     (TradeService.prototype.getTradeById as jest.Mock).mockResolvedValue({
       tradeId: "4294967297",
       buyerAddress: buyerAddress,
@@ -165,10 +171,11 @@ describe("Trade Routes", () => {
       .set("Authorization", `Bearer ${sellerToken}`);
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toBe("Forbidden");
+    expect(res.body.code).toBe(ErrorCode.TRADE_ACCESS_DENIED);
+    expect(res.body.timestamp).toBeDefined();
   });
 
-  it("returns 400 if the trade is already funded", async () => {
+  it("returns 400 with structured error if the trade is already funded", async () => {
     (TradeService.prototype.getTradeById as jest.Mock).mockResolvedValue({
       tradeId: "4294967297",
       buyerAddress: buyerAddress,
@@ -182,7 +189,9 @@ describe("Trade Routes", () => {
       .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toBe("Trade must be in CREATED status");
+    expect(res.body.code).toBe(ErrorCode.TRADE_INVALID_STATUS);
+    expect(res.body.details).toHaveProperty("currentStatus", "FUNDED");
+    expect(res.body.timestamp).toBeDefined();
   });
 
   it("does not create a pending trade when create_trade contract build fails", async () => {
@@ -201,6 +210,7 @@ describe("Trade Routes", () => {
       });
 
     expect(res.status).toBe(500);
+    expect(res.body.code).toBe(ErrorCode.TRADE_BUILD_FAILED);
     expect(TradeService.prototype.createPendingTrade).not.toHaveBeenCalled();
   });
 });
