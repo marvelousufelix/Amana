@@ -1,5 +1,17 @@
 import { PrismaClient, DisputeStatus } from "@prisma/client";
 import { AppError, ErrorCode } from "../errors/errorCodes";
+import { getMediatorAllowlist } from "../lib/accessControl";
+
+/** Terminal dispute statuses — disputes in these states are considered complete. */
+export const COMPLETED_DISPUTE_STATUSES: DisputeStatus[] = [
+  DisputeStatus.RESOLVED,
+  DisputeStatus.CLOSED,
+];
+
+export interface DisputeCleanupResult {
+  purgedCount: number;
+  tradeIds: string[];
+}
 
 export interface DisputeResponse {
   id: number;
@@ -45,13 +57,7 @@ export class DisputeService {
     const { status, page = 1, limit = 10 } = params;
     const offset = (page - 1) * limit;
 
-    const mediatorAddresses = new Set(
-      (process.env.ADMIN_STELLAR_PUBKEYS ?? "")
-        .split(",")
-        .map(addr => addr.trim().toLowerCase())
-        .filter(Boolean),
-    );
-    if (!mediatorAddresses.has(mediatorAddress.toLowerCase())) {
+    if (!getMediatorAllowlist().has(mediatorAddress)) {
       throw new AppError(ErrorCode.AUTH_ERROR, "Unauthorized: Not a mediator", 403);
     }
 
@@ -119,6 +125,51 @@ export class DisputeService {
   }
 
   /**
+   * Purge transient/sensitive data fields from disputes that have reached a
+   * terminal status (RESOLVED or CLOSED).  The core record is retained for
+   * audit purposes; only the free-text `reason` field is cleared so that PII
+   * is not stored indefinitely after a case concludes.
+   *
+   * Only a mediator (address listed in ADMIN_STELLAR_PUBKEYS) may trigger this
+   * operation.  Returns the number of records updated and the affected tradeIds.
+   */
+  async purgeCompletedDisputeData(
+    mediatorAddress: string,
+    olderThanDays = 90
+  ): Promise<DisputeCleanupResult> {
+    if (!getMediatorAllowlist().has(mediatorAddress)) {
+      throw new AppError(ErrorCode.AUTH_ERROR, "Unauthorized: Not a mediator", 403);
+    }
+
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
+
+    const completed = await this.prisma.dispute.findMany({
+      where: {
+        status: { in: COMPLETED_DISPUTE_STATUSES },
+        resolvedAt: { lte: cutoff },
+        reason: { not: "" },
+      },
+      select: { id: true, tradeId: true },
+    });
+
+    if (completed.length === 0) {
+      return { purgedCount: 0, tradeIds: [] };
+    }
+
+    const ids = completed.map((d: { id: number; tradeId: string }) => d.id);
+
+    await this.prisma.dispute.updateMany({
+      where: { id: { in: ids } },
+      data: { reason: "" },
+    });
+
+    return {
+      purgedCount: completed.length,
+      tradeIds: completed.map((d: { id: number; tradeId: string }) => d.tradeId),
+    };
+  }
+
+  /**
    * Transition a dispute to a new status.
    * Only valid forward transitions are permitted; backwards or sideways moves throw
    * DISPUTE_STATUS_TRANSITION_INVALID.
@@ -128,13 +179,7 @@ export class DisputeService {
     mediatorAddress: string,
     newStatus: DisputeStatus
   ): Promise<DisputeResponse> {
-    const mediatorAddresses = new Set(
-      (process.env.ADMIN_STELLAR_PUBKEYS ?? "")
-        .split(",")
-        .map(addr => addr.trim().toLowerCase())
-        .filter(Boolean),
-    );
-    if (!mediatorAddresses.has(mediatorAddress.toLowerCase())) {
+    if (!getMediatorAllowlist().has(mediatorAddress)) {
       throw new AppError(ErrorCode.AUTH_ERROR, "Unauthorized: Not a mediator", 403);
     }
 

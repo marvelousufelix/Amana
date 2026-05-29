@@ -15,6 +15,7 @@ import {
   DisputeCategoryValidationError,
 } from "../services/trade.service";
 import { AppError, ErrorCode } from "../errors/errorCodes";
+import { getMediatorAllowlist } from "../lib/accessControl";
 
 const AMOUNT_USDC_PATTERN = /^\d+(?:\.\d{1,7})?$/;
 
@@ -26,13 +27,7 @@ interface CreateTradeBody {
 }
 
 function parseAdminPubkeys(): Set<string> {
-  const raw = process.env.ADMIN_STELLAR_PUBKEYS ?? "";
-  return new Set(
-    raw
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean),
-  );
+  return getMediatorAllowlist();
 }
 
 export function isBuyer(tradeBuyer: string, caller: string): boolean {

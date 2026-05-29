@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { PrismaClient, TradeStatus } from "@prisma/client";
 import { prisma as defaultPrisma } from "../lib/db";
+import { getMediatorAllowlist } from "../lib/accessControl";
 
 export interface SubmitManifestInput {
     tradeId: string;
@@ -79,13 +80,7 @@ function isUniqueConstraintError(error: unknown): boolean {
 }
 
 function parseMediatorAllowlist(): Set<string> {
-    const raw = process.env.ADMIN_STELLAR_PUBKEYS ?? "";
-    return new Set(
-        raw
-            .split(",")
-            .map((value) => value.trim().toLowerCase())
-            .filter(Boolean),
-    );
+    return getMediatorAllowlist();
 }
 
 function maskDriverName(driverName: string): string {
